@@ -36,7 +36,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#151f32] p-8 shadow-xl">
         <h1 className="mb-2 text-3xl font-bold">Welcome back</h1>
         <p className="mb-8 text-gray-400">
-          Sign in to continue to NovaChat.
+          Sign in to continue to FLYby.
         </p>
 
         <form onSubmit={handleLogin} className="space-y-5">

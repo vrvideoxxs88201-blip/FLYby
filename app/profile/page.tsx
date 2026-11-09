@@ -96,14 +96,14 @@ export default function ProfilePage() {
           href="/"
           className="text-blue-400 hover:text-blue-300"
         >
-          ← Back to NovaChat
+          ← Back to FLYby
         </Link>
 
         <div className="mt-8 rounded-2xl border border-white/10 bg-[#111a2b] p-7">
           <h1 className="text-3xl font-bold">My Profile</h1>
 
           <p className="text-gray-400 mt-2">
-            Manage your NovaChat account information.
+            Manage your FLYby account information.
           </p>
 
           <div className="mt-8 flex justify-center">
