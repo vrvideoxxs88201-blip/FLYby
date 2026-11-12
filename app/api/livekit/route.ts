@@ -75,14 +75,21 @@ export async function POST(request: NextRequest) {
     }
 
     const apiKey = process.env.LIVEKIT_API_KEY;
-    const apiSecret = process.env.LIVEKIT_API_SECRET;
+const apiSecret = process.env.LIVEKIT_API_SECRET;
+const livekitUrl = process.env.LIVEKIT_URL;
 
-    if (!apiKey || !apiSecret) {
-      return NextResponse.json(
-        { error: "LiveKit is not configured" },
-        { status: 500 }
-      );
-    }
+if (!apiKey || !apiSecret || !livekitUrl) {
+  console.error("Missing LiveKit environment variables:", {
+    apiKey: !!apiKey,
+    apiSecret: !!apiSecret,
+    livekitUrl: !!livekitUrl,
+  });
+
+  return NextResponse.json(
+    { error: "LiveKit is not configured" },
+    { status: 500 }
+  );
+} 
 
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: user.id,
@@ -102,7 +109,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
   token: jwt,
   roomName: `call_${call.id}`,
-  serverUrl: process.env.LIVEKIT_URL,
+  serverUrl: livekitUrl,
 });
   } catch (error) {
     console.error("LiveKit token error:", error);
