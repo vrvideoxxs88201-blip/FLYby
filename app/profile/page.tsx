@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../lib/supabase";
@@ -10,6 +10,7 @@ export default function ProfilePage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
@@ -18,7 +19,9 @@ export default function ProfilePage() {
 
   useEffect(() => {
     async function loadProfile() {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
       if (!user) {
         router.replace("/login");
@@ -46,10 +49,65 @@ export default function ProfilePage() {
     loadProfile();
   }, [router]);
 
+  async function uploadAvatar(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    setError("");
+
+    if (!file.type.startsWith("image/")) {
+      setError("Please select an image file.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Your image must be smaller than 5 MB.");
+      return;
+    }
+
+    setUploading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.replace("/login");
+      setUploading(false);
+      return;
+    }
+
+    const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const filePath = `${user.id}/avatar.${extension}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      setError(uploadError.message);
+      setUploading(false);
+      return;
+    }
+
+    const { data } = supabase.storage
+      .from("avatars")
+      .getPublicUrl(filePath);
+
+    setAvatarUrl(data.publicUrl);
+    setUploading(false);
+  }
+
   async function saveProfile() {
     setError("");
 
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
     if (!user) {
       router.replace("/login");
@@ -106,8 +164,8 @@ export default function ProfilePage() {
             Manage your FLYby account information.
           </p>
 
-          <div className="mt-8 flex justify-center">
-            <div className="w-24 h-24 rounded-full bg-blue-600 flex items-center justify-center text-3xl font-bold overflow-hidden">
+          <div className="mt-8 flex flex-col items-center">
+            <div className="w-28 h-28 rounded-full bg-blue-600 flex items-center justify-center text-3xl font-bold overflow-hidden border-2 border-white/10">
               {avatarUrl ? (
                 <img
                   src={avatarUrl}
@@ -118,6 +176,22 @@ export default function ProfilePage() {
                 (fullName || username || "U").charAt(0).toUpperCase()
               )}
             </div>
+
+            <label className="mt-4 cursor-pointer rounded-lg bg-blue-600 hover:bg-blue-500 px-5 py-2 text-sm font-semibold">
+              {uploading ? "Uploading..." : "Upload Profile Picture"}
+
+              <input
+                type="file"
+                accept="image/*"
+                onChange={uploadAvatar}
+                disabled={uploading}
+                className="hidden"
+              />
+            </label>
+
+            <p className="text-xs text-gray-500 mt-2">
+              Choose an image. Maximum size: 5 MB.
+            </p>
           </div>
 
           <div className="mt-8 space-y-5">
@@ -158,25 +232,14 @@ export default function ProfilePage() {
               />
             </div>
 
-            <div>
-              <label className="block text-sm text-gray-300 mb-2">
-                Profile picture URL
-              </label>
-              <input
-                value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
-                placeholder="Paste an image URL"
-                className="w-full rounded-lg bg-[#080d19] border border-white/10 p-3 outline-none focus:border-blue-500"
-              />
-            </div>
-
             {error && (
               <p className="text-red-400 text-sm">{error}</p>
             )}
 
             <button
               onClick={saveProfile}
-              className="w-full rounded-lg bg-blue-600 hover:bg-blue-500 p-3 font-semibold"
+              disabled={uploading}
+              className="w-full rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 p-3 font-semibold"
             >
               Save Profile
             </button>

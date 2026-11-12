@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import CallScreen from "./components/CallScreen"; 
 
 type Profile = {
   id: string;
@@ -53,7 +54,7 @@ export default function Home() {
   const [gifResults, setGifResults] = useState<
   { id: string; url: string; preview: string }[]
 >([]);
-  const [users, setUsers] = useState<Profile[]>([]);
+   const [users, setUsers] = useState<Profile[]>([]);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [showUsers, setShowUsers] = useState(false);
@@ -62,8 +63,134 @@ export default function Home() {
   const [error, setError] = useState("");
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+
+  const [activeCall, setActiveCall] = useState<any>(null);
+  const [incomingCall, setIncomingCall] = useState<any>(null);
+  const [callLoading, setCallLoading] = useState(false);
+  const [showCall, setShowCall] = useState(false);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    const channel = supabase
+      .channel("incoming-calls")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "calls",
+          filter: `receiver_id=eq.${userId}`,
+        },
+        (payload) => {
+          const newCall = payload.new as {
+            id: string;
+            caller_id: string;
+            receiver_id: string;
+            call_type: "audio" | "video";
+            status: string;
+          };
+
+          if (newCall.status === "ringing") {
+            setIncomingCall(newCall);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
+
   const typingChannelRef = useRef<any>(null);
-const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    async function acceptCall() {
+    if (!incomingCall || callLoading) return;
+
+    setCallLoading(true);
+    setError("");
+
+    try {
+      const { error: acceptError } = await supabase.rpc("accept_call", {
+        p_call_id: incomingCall.id,
+      });
+
+      if (acceptError) {
+        throw acceptError;
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        throw new Error("Please sign in again.");
+      }
+
+      const response = await fetch("/api/livekit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          callId: incomingCall.id,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Could not join the call.");
+      }
+
+      setActiveCall({
+        id: incomingCall.id,
+        token: result.token,
+        serverUrl: result.serverUrl,
+        callType: incomingCall.call_type,
+      });
+
+      setIncomingCall(null);
+      setShowCall(true);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not accept the call."
+      );
+    } finally {
+      setCallLoading(false);
+    }
+  }
+
+  async function rejectCall() {
+    if (!incomingCall || callLoading) return;
+
+    setCallLoading(true);
+    setError("");
+
+    try {
+      const { error: rejectError } = await supabase.rpc("reject_call", {
+        p_call_id: incomingCall.id,
+      });
+
+      if (rejectError) {
+        throw rejectError;
+      }
+
+      setIncomingCall(null);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not reject the call."
+      );
+    } finally {
+      setCallLoading(false);
+    }
+  }
 
  const loadChats = useCallback(async () => {
   const { data, error } = await supabase.rpc("get_my_conversations");
@@ -98,6 +225,72 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   setChats(updatedChats);
 }, [userId]);
+
+async function startCall(callType: "audio" | "video") {
+  if (!activeChat || callLoading) return;
+
+  setCallLoading(true);
+  setError("");
+
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      throw new Error("Please sign in again.");
+    }
+
+    const { data: call, error: insertError } = await supabase
+      .from("calls")
+      .insert({
+        conversation_id: activeChat.conversation_id,
+        caller_id: userId,
+        receiver_id: activeChat.other_user_id,
+        call_type: callType,
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !call) {
+      throw new Error(insertError?.message || "Could not create call.");
+    }
+
+    const response = await fetch("/api/livekit", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ callId: call.id }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      await supabase.rpc("end_call", {
+        p_call_id: call.id,
+      });
+
+      throw new Error(result.error || "Could not connect to LiveKit.");
+    }
+
+    setActiveCall({
+      id: call.id,
+      token: result.token,
+      serverUrl: result.serverUrl,
+      callType,
+    });
+
+    setShowCall(true);
+  } catch (error) {
+    setError(
+      error instanceof Error ? error.message : "Could not start call."
+    );
+  } finally {
+    setCallLoading(false);
+  }
+}
 
   const loadMessages = useCallback(async (conversationId: string) => {
     const { data, error } = await supabase
@@ -725,7 +918,7 @@ await loadChats();
       title="Edit profile"
       className="rounded-lg p-2 text-lg text-slate-400 hover:bg-white/10 hover:text-white"
     >
-      ⚙
+      👤
     </button>
 
     <button
@@ -789,25 +982,46 @@ await loadChats();
               </p>
             </div>
           )}
-                    <button
-            type="button"
-            onClick={async () => {
-              if (!("Notification" in window)) return;
+           <button
+  type="button"
+  onClick={async () => {
+    if (!("Notification" in window)) return;
 
-              const permission = await Notification.requestPermission();
+    const permission = await Notification.requestPermission();
 
-              setNotificationsEnabled(permission === "granted");
-            }}
-            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold hover:bg-blue-500"
-          >
-            {notificationsEnabled
-              ? "Notifications On"
-              : "Enable Notifications"}
+    setNotificationsEnabled(permission === "granted");
+  }}
+  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold hover:bg-blue-500"
+>
+  {notificationsEnabled
+    ? "Notifications On"
+    : "Enable Notifications"}
 
-            {unreadCount > 0 && ` (${unreadCount})`}
-          </button>
-        </header>
+  {unreadCount > 0 && ` (${unreadCount})`}
+</button>
 
+{activeChat && (
+  <div className="flex items-center gap-2">
+    <button
+      type="button"
+      onClick={() => startCall("audio")}
+      disabled={callLoading}
+      className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+    >
+      📞 Voice
+    </button>
+
+    <button
+      type="button"
+      onClick={() => startCall("video")}
+      disabled={callLoading}
+      className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+    >
+      📹 Video
+    </button>
+  </div>
+)}
+</header>
         {error && (
           <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
             {error}
@@ -1052,6 +1266,60 @@ await loadChats();
           </form> 
         )}
       </section>
+            {showCall && activeCall && (
+        <CallScreen
+          token={activeCall.token}
+          serverUrl={activeCall.serverUrl}
+          callType={activeCall.callType}
+          onLeave={async () => {
+            await supabase.rpc("end_call", { 
+              p_call_id: activeCall.id,
+            });
+
+            setShowCall(false);
+            setActiveCall(null);
+            setIncomingCall(null);
+          }}
+        />
+      )}
+          {incomingCall && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111b2b] p-6 text-center shadow-2xl">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-indigo-600 text-2xl">
+              {incomingCall.call_type === "video" ? "📹" : "📞"}
+            </div>
+
+            <h2 className="text-xl font-bold text-white">
+              Incoming {incomingCall.call_type} call
+            </h2>
+
+            <p className="mt-2 text-sm text-slate-400">
+              Someone is calling you on FLYby.
+            </p>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={rejectCall}
+                disabled={callLoading}
+                className="flex-1 rounded-xl bg-red-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                Reject
+              </button>
+
+              <button
+                type="button"
+                onClick={acceptCall}
+                disabled={callLoading}
+                className="flex-1 rounded-xl bg-green-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                {callLoading ? "Connecting..." : "Accept"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </main>
   );
 }
